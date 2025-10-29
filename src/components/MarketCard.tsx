@@ -51,37 +51,40 @@ export default function MarketCard({ market }: MarketCardProps) {
 
         {/* Market Info with Clickable Addresses */}
         <div className="text-xs text-neutral-500 dark:text-neutral-400 mb-3 flex flex-wrap gap-x-2 gap-y-1">
-          <a
-            href={getSolscanUrl(market.address.toString(), 'account')}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            className="hover:text-blue-600 dark:hover:text-blue-400 underline"
+          <span
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              window.open(getSolscanUrl(market.address.toString(), 'account'), '_blank');
+            }}
+            className="hover:text-blue-600 dark:hover:text-blue-400 underline cursor-pointer"
           >
             Market: {market.address.toString().slice(0, 4)}...{market.address.toString().slice(-4)}
-          </a>
+          </span>
           {market.yesTokenMint.toString() !== '11111111111111111111111111111111' && (
             <>
               <span>•</span>
-              <a
-                href={getSolscanUrl(market.yesTokenMint.toString(), 'token')}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={(e) => e.stopPropagation()}
-                className="hover:text-blue-600 dark:hover:text-blue-400 underline"
+              <span
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  window.open(getSolscanUrl(market.yesTokenMint.toString(), 'token'), '_blank');
+                }}
+                className="hover:text-blue-600 dark:hover:text-blue-400 underline cursor-pointer"
               >
                 YES: {market.yesTokenMint.toString().slice(0, 4)}...{market.yesTokenMint.toString().slice(-4)}
-              </a>
+              </span>
               <span>•</span>
-              <a
-                href={getSolscanUrl(market.noTokenMint.toString(), 'token')}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={(e) => e.stopPropagation()}
-                className="hover:text-blue-600 dark:hover:text-blue-400 underline"
+              <span
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  window.open(getSolscanUrl(market.noTokenMint.toString(), 'token'), '_blank');
+                }}
+                className="hover:text-blue-600 dark:hover:text-blue-400 underline cursor-pointer"
               >
                 NO: {market.noTokenMint.toString().slice(0, 4)}...{market.noTokenMint.toString().slice(-4)}
-              </a>
+              </span>
             </>
           )}
         </div>

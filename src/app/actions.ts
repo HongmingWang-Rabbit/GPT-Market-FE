@@ -4,7 +4,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { useFacilitator } from "x402/verify";
 import { PaymentRequirements } from "x402/types";
-import { exact } from "x402/schemes";
+import { exact, decodePayment } from "x402/schemes";
 
 export async function verifyPayment(payload: string, amountInSmallestUnit: string): Promise<string> {
   // Calculate GAME$ tokens (1 USDC = 100 GAME$)
@@ -157,6 +157,76 @@ export async function verifyLuckyDrawPayment(payload: string): Promise<{ success
     return { success: true, prize: randomPrize };
   } catch (error) {
     console.error("[Server] Lucky Draw Error:", error);
+    return { success: false, error: String(error) };
+  }
+}
+
+export async function verifyMarketTokenPayment(
+  payload: string,
+  amountInSmallestUnit: string,
+  marketId: string,
+  tokenType: 'yes' | 'no'
+): Promise<{ success: boolean; transaction?: string; error?: string }> {
+  const usdcAmount = (parseInt(amountInSmallestUnit) / 1_000_000).toFixed(2);
+
+  // Define payment requirements for market token purchase on Solana
+  const paymentRequirements: PaymentRequirements = {
+    scheme: "exact",
+    network: "solana-devnet", // Using Solana devnet
+    maxAmountRequired: amountInSmallestUnit,
+    resource: `https://402market.com/market/${marketId}`,
+    description: `${tokenType.toUpperCase()} tokens for Market #${marketId}`,
+    mimeType: "application/json",
+    payTo:
+      process.env.NEXT_PUBLIC_X402_PAYMENT_ADDRESS ||
+      "CRD9Pe7ou8yidVnCn3a1rUejSczCA1xsSwajfqS5Xfwb", // Solana wallet address
+    maxTimeoutSeconds: 600,
+    asset: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", // USDC on Solana devnet
+    outputSchema: undefined,
+    extra: undefined, // No extra data needed for Solana
+  };
+
+  let payment;
+
+  try {
+    // Use scheme-agnostic decodePayment for Solana payments
+    payment = decodePayment(payload);
+    console.log("[Server] Market Token Payment decoded:", payment);
+
+    // Validate basic payment structure
+    if (payment.scheme !== "exact") {
+      return { success: false, error: "Invalid payment scheme" };
+    }
+
+    if (payment.network !== "solana-devnet" && payment.network !== "solana") {
+      return { success: false, error: "Invalid network for Solana payment" };
+    }
+
+    if (!payment.payload || typeof payment.payload.transaction !== 'string') {
+      return { success: false, error: "Invalid Solana transaction payload" };
+    }
+
+    // For Solana devnet, we'll validate transaction structure and let the client execute it
+    // The facilitator doesn't support Solana yet, so we use client-side transaction execution
+    console.log("[Server] Market Token Payment validated successfully");
+    console.log("\n✅ MARKET TOKEN PAYMENT VALIDATED!");
+    console.log("===================================");
+    console.log("Market ID:", marketId);
+    console.log("Token Type:", tokenType.toUpperCase());
+    console.log("Amount: $" + usdcAmount + " USDC");
+    console.log("Recipient:", paymentRequirements.payTo);
+    console.log("Network: Solana devnet");
+    console.log("Transaction will be executed client-side");
+    console.log("===================================\n");
+
+    // Return success with the transaction data
+    // The actual transaction execution happens client-side when wallet signs and sends it
+    return {
+      success: true,
+      transaction: payment.payload.transaction
+    };
+  } catch (error) {
+    console.error("[Server] Market Token Payment Error:", error);
     return { success: false, error: String(error) };
   }
 }

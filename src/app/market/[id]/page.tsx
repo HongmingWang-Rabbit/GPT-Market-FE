@@ -9,6 +9,7 @@ import { useMarket } from "@/hooks/useMarkets";
 import { useSwap } from "@/hooks/useSwap";
 import { useTokenBalance } from "@/hooks/useTokenBalance";
 import { useLiquidity } from "@/hooks/useLiquidity";
+import { solToUsd } from "@/lib/priceFeed";
 import Link from "next/link";
 
 export default function MarketDetailPage() {
@@ -49,10 +50,26 @@ export default function MarketDetailPage() {
     "add"
   );
   const [liquidityAmount, setLiquidityAmount] = useState("");
+  const [usdAmount, setUsdAmount] = useState<number | null>(null);
+  const [useX402, setUseX402] = useState(true); // Toggle between X402 and direct contract
+  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
 
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  // Calculate USD amount when SOL amount changes
+  useEffect(() => {
+    async function calculateUsd() {
+      if (solAmount && parseFloat(solAmount) > 0) {
+        const usd = await solToUsd(parseFloat(solAmount));
+        setUsdAmount(usd);
+      } else {
+        setUsdAmount(null);
+      }
+    }
+    calculateUsd();
+  }, [solAmount]);
 
   if (marketLoading) {
     return (
@@ -103,28 +120,40 @@ export default function MarketDetailPage() {
     const amount = parseFloat(solAmount);
     if (amount > 0 && selectedOutcome && wallet.publicKey) {
       try {
-        // Get team wallet from market data (creator)
-        const teamWallet = market.creator.toString();
+        if (useX402 && usdAmount) {
+          // Redirect to paywall page with market parameters
+          console.log('💰 Redirecting to X402 payment page');
 
-        const signature = await buyTokens(
-          market.id,
-          market.yesTokenMint.toString(),
-          market.noTokenMint.toString(),
-          selectedOutcome,
-          amount,
-          teamWallet
-        );
+          const paywallUrl = `/paywall?amount=${usdAmount.toFixed(2)}&marketId=${market.id}&outcome=${selectedOutcome}`;
+          window.location.href = paywallUrl;
+          return;
+        } else {
+          // Original contract-based swap (currently not working)
+          const teamWallet = market.creator.toString();
 
-        setTxSignature(signature);
-        // Close modal and show success
+          const signature = await buyTokens(
+            market.id,
+            market.yesTokenMint.toString(),
+            market.noTokenMint.toString(),
+            selectedOutcome,
+            amount,
+            teamWallet
+          );
+
+          setTxSignature(signature);
+        }
+
+        // Close modal after delay
         setTimeout(() => {
           setShowBuyModal(false);
           setSolAmount("");
           setSelectedOutcome(null);
           setTxSignature(null);
-        }, 3000);
+        }, 5000);
       } catch (err) {
         console.error("Purchase failed:", err);
+        setIsProcessingPayment(false);
+        alert(`Purchase failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
       }
     }
   };
@@ -378,18 +407,19 @@ export default function MarketDetailPage() {
           </div>
         )}
 
-        {/* Liquidity Warning */}
+        {/* Liquidity Info */}
         {market.liquidity === 0 && !isMarketCreator && (
-          <div className="mb-6 bg-yellow-50 dark:bg-yellow-900/20 border-2 border-yellow-400 dark:border-yellow-700 rounded-lg p-4">
+          <div className="mb-6 bg-blue-50 dark:bg-blue-900/20 border-2 border-blue-400 dark:border-blue-700 rounded-lg p-4">
             <div className="flex items-start gap-3">
-              <div className="text-2xl">⚠️</div>
+              <div className="text-2xl">ℹ️</div>
               <div className="flex-1">
-                <h3 className="text-lg font-bold text-yellow-900 dark:text-yellow-200 mb-2">
-                  No Liquidity Available
+                <h3 className="text-lg font-bold text-blue-900 dark:text-blue-200 mb-2">
+                  No Liquidity - Using X402 for Payments
                 </h3>
-                <p className="text-sm text-yellow-800 dark:text-yellow-300">
-                  This market has no liquidity (0 SOL in reserves). Trading is
-                  not possible until the market creator adds initial liquidity.
+                <p className="text-sm text-blue-800 dark:text-blue-300">
+                  This market has no liquidity (0 SOL in reserves). You can still
+                  purchase tokens by depositing USDC via X402. Direct contract swaps
+                  won&apos;t work until liquidity is added.
                 </p>
               </div>
             </div>
@@ -415,14 +445,10 @@ export default function MarketDetailPage() {
             </div>
             <button
               onClick={() => handleBuyClick("yes")}
-              disabled={market.liquidity === 0 || swapLoading}
-              className={`w-full font-bold py-3 px-6 rounded-lg transition-colors ${
-                market.liquidity === 0 || swapLoading
-                  ? "bg-gray-400 cursor-not-allowed text-gray-200"
-                  : "bg-green-600 hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-600 text-white"
-              }`}
+              disabled={swapLoading}
+              className="w-full font-bold py-3 px-6 rounded-lg transition-colors bg-green-600 hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-600 text-white disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {market.liquidity === 0 ? "No Liquidity" : "Buy Yes"}
+              Buy Yes
             </button>
           </div>
 
@@ -443,14 +469,10 @@ export default function MarketDetailPage() {
             </div>
             <button
               onClick={() => handleBuyClick("no")}
-              disabled={market.liquidity === 0 || swapLoading}
-              className={`w-full font-bold py-3 px-6 rounded-lg transition-colors ${
-                market.liquidity === 0 || swapLoading
-                  ? "bg-gray-400 cursor-not-allowed text-gray-200"
-                  : "bg-red-600 hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600 text-white"
-              }`}
+              disabled={swapLoading}
+              className="w-full font-bold py-3 px-6 rounded-lg transition-colors bg-red-600 hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600 text-white disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {market.liquidity === 0 ? "No Liquidity" : "Buy No"}
+              Buy No
             </button>
           </div>
         </div>
@@ -597,6 +619,21 @@ export default function MarketDetailPage() {
                 </p>
               </div>
 
+              {/* X402 Info */}
+              {useX402 && (
+                <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-300 dark:border-blue-700 rounded-lg p-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-lg">🔗</span>
+                    <span className="text-sm font-semibold text-blue-900 dark:text-blue-200">
+                      Using X402 Protocol
+                    </span>
+                  </div>
+                  <p className="text-xs text-blue-800 dark:text-blue-300">
+                    You&apos;ll be redirected to complete payment using USDC via X402.
+                  </p>
+                </div>
+              )}
+
               {/* Calculation */}
               {solAmount && parseFloat(solAmount) > 0 && (
                 <div
@@ -609,15 +646,22 @@ export default function MarketDetailPage() {
                   <div className="space-y-2 text-sm">
                     <div className="flex items-center justify-between">
                       <span className="text-neutral-700 dark:text-neutral-300">
-                        Price per share:
+                        SOL Amount:
                       </span>
                       <span className="font-bold text-neutral-900 dark:text-neutral-100">
-                        {selectedOutcome === "yes"
-                          ? market.yesPrice.toFixed(4)
-                          : market.noPrice.toFixed(4)}{" "}
-                        SOL
+                        {parseFloat(solAmount).toFixed(4)} SOL
                       </span>
                     </div>
+                    {usdAmount && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-neutral-700 dark:text-neutral-300">
+                          USD Equivalent:
+                        </span>
+                        <span className="font-bold text-neutral-900 dark:text-neutral-100">
+                          ${usdAmount.toFixed(2)} USDC
+                        </span>
+                      </div>
+                    )}
                     <div className="flex items-center justify-between">
                       <span className="text-neutral-700 dark:text-neutral-300">
                         Shares you&apos;ll get:
@@ -639,11 +683,11 @@ export default function MarketDetailPage() {
               )}
 
               {/* Transaction Status */}
-              {swapLoading && (
+              {(swapLoading || isProcessingPayment) && (
                 <div className="text-center py-4">
                   <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
                   <p className="text-sm text-neutral-600 dark:text-neutral-400 mt-2">
-                    Processing transaction...
+                    {useX402 ? 'Processing X402 payment...' : 'Processing transaction...'}
                   </p>
                 </div>
               )}
@@ -651,7 +695,7 @@ export default function MarketDetailPage() {
               {txSignature && (
                 <div className="bg-green-100 dark:bg-green-900/30 border border-green-300 dark:border-green-700 rounded-lg p-4">
                   <p className="text-green-700 dark:text-green-400 font-semibold mb-2">
-                    Transaction successful!
+                    {useX402 ? 'Payment successful!' : 'Transaction successful!'}
                   </p>
                   <a
                     href={`https://explorer.solana.com/tx/${txSignature}?cluster=devnet`}
@@ -693,6 +737,7 @@ export default function MarketDetailPage() {
                     !solAmount ||
                     parseFloat(solAmount) < 0.01 ||
                     swapLoading ||
+                    isProcessingPayment ||
                     !!txSignature
                   }
                   className={`flex-1 font-bold py-3 px-6 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
@@ -703,10 +748,12 @@ export default function MarketDetailPage() {
                 >
                   {!wallet.publicKey
                     ? "Connect Wallet"
-                    : swapLoading
+                    : swapLoading || isProcessingPayment
                     ? "Processing..."
                     : txSignature
                     ? "Success!"
+                    : useX402
+                    ? `Continue to Payment ($${usdAmount?.toFixed(2) || '0.00'})`
                     : "Buy Tokens"}
                 </button>
               </div>

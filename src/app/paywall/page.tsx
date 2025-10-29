@@ -1,79 +1,111 @@
 "use client";
-import { Wallet } from "@coinbase/onchainkit/wallet";
+import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { useState, useEffect, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
-import { verifyPayment } from "../actions";
-import { PaymentRequirements, PaymentPayload } from "x402/types";
-import { preparePaymentHeader } from "x402/client";
-import { getNetworkId } from "x402/shared";
-import { exact } from "x402/schemes";
-import { useAccount, useSignTypedData } from "wagmi";
+import { useSearchParams, useRouter } from "next/navigation";
+import { verifyMarketTokenPayment } from "../actions";
+import { PaymentRequirements } from "x402/types";
+import { createSolanaPaymentPayload } from "@/lib/x402-solana";
+import { encodePayment } from "x402/schemes";
+import { Buffer } from "buffer";
 
 function PaymentForm({
   paymentRequirements,
+  marketId,
+  outcome,
 }: {
   paymentRequirements: PaymentRequirements;
+  marketId: string | null;
+  outcome: 'yes' | 'no' | null;
 }) {
-  const { address, isConnected } = useAccount();
+  const wallet = useWallet();
+  const { connection } = useConnection();
+  const router = useRouter();
   const [isProcessing, setIsProcessing] = useState(false);
-  const { isError, isSuccess, signTypedDataAsync } = useSignTypedData();
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
 
-  if (!address || !isConnected) {
+  if (!wallet.publicKey || !wallet.connected) {
     return (
       <div className="text-center space-y-4">
-        <Wallet />
-        <p className="text-gray-400">
-          Please connect your wallet to proceed with payment.
+        <WalletMultiButton />
+        <p className="text-neutral-600 dark:text-neutral-400">
+          Please connect your Solana wallet to proceed with payment.
         </p>
       </div>
     );
   }
 
-  const unSignedPaymentHeader = preparePaymentHeader(
-    address,
-    1,
-    paymentRequirements
-  );
-
-  const eip712Data = {
-    types: {
-      TransferWithAuthorization: [
-        { name: "from", type: "address" },
-        { name: "to", type: "address" },
-        { name: "value", type: "uint256" },
-        { name: "validAfter", type: "uint256" },
-        { name: "validBefore", type: "uint256" },
-        { name: "nonce", type: "bytes32" },
-      ],
-    },
-    domain: {
-      name: paymentRequirements.extra?.name,
-      version: paymentRequirements.extra?.version,
-      chainId: getNetworkId(paymentRequirements.network),
-      verifyingContract: paymentRequirements.asset as `0x${string}`,
-    },
-    primaryType: "TransferWithAuthorization" as const,
-    message: unSignedPaymentHeader.payload.authorization,
-  };
-
   async function handlePayment() {
     setIsProcessing(true);
-    const signature = await signTypedDataAsync(eip712Data);
+    setError(null);
 
-    const paymentPayload: PaymentPayload = {
-      ...unSignedPaymentHeader,
-      payload: {
-        ...unSignedPaymentHeader.payload,
-        signature,
-      },
-    };
+    try {
+      console.log('Creating Solana payment transaction...');
 
-    const payment: string = exact.evm.encodePayment(paymentPayload);
+      // Create the payment payload (signed transaction)
+      const paymentPayload = await createSolanaPaymentPayload(
+        wallet,
+        paymentRequirements,
+        connection
+      );
 
-    const verifyPaymentWithPayment = verifyPayment.bind(null, payment, paymentRequirements.maxAmountRequired);
-    const result = await verifyPaymentWithPayment();
-    console.log("result", result);
-    setIsProcessing(false);
+      console.log('Encoding payment...');
+      // Encode the payment (scheme-agnostic encoding)
+      const payment = encodePayment(paymentPayload);
+
+      console.log('Verifying payment with server...');
+      // Verify payment server-side
+      const result = await verifyMarketTokenPayment(
+        payment,
+        paymentRequirements.maxAmountRequired,
+        marketId || 'general',
+        outcome || 'yes'
+      );
+
+      if (!result.success) {
+        throw new Error(result.error || 'Payment verification failed');
+      }
+
+      console.log('✅ Payment validated! Sending transaction to Solana...');
+
+      // Decode the signed transaction and send it to Solana
+      const signedTransactionBase64 = paymentPayload.payload.transaction;
+      const signedTransactionBuffer = Buffer.from(signedTransactionBase64, 'base64');
+
+      // Send the transaction to Solana network
+      const signature = await connection.sendRawTransaction(signedTransactionBuffer, {
+        skipPreflight: false,
+        preflightCommitment: 'confirmed',
+      });
+
+      console.log('Transaction sent! Signature:', signature);
+      console.log('Confirming transaction...');
+
+      // Wait for confirmation
+      const confirmation = await connection.confirmTransaction(signature, 'confirmed');
+
+      if (confirmation.value.err) {
+        throw new Error('Transaction failed: ' + JSON.stringify(confirmation.value.err));
+      }
+
+      console.log('✅ Transaction confirmed!', signature);
+      setSuccess(true);
+
+      // Redirect back to market after success
+      setTimeout(() => {
+        if (marketId) {
+          router.push(`/market/${marketId}?payment=success`);
+        } else {
+          router.push('/?payment=success');
+        }
+      }, 2000);
+    } catch (err: any) {
+      console.error('Payment error:', err);
+      setError(err.message || 'Payment failed. Please try again.');
+    } finally {
+      setIsProcessing(false);
+    }
   }
 
   const usdcAmount = (
@@ -85,7 +117,9 @@ function PaymentForm({
 
   return (
     <div className="space-y-6">
-      <Wallet />
+      <div className="flex justify-center">
+        <WalletMultiButton />
+      </div>
 
       <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl p-6">
         <h3 className="text-xl font-bold mb-4 text-neutral-900 dark:text-neutral-100">
@@ -96,7 +130,7 @@ function PaymentForm({
             <span className="font-semibold text-neutral-900 dark:text-neutral-100">
               Amount:
             </span>{" "}
-            ${usdcAmount} USDC
+            ${usdcAmount} USDC (on Solana devnet)
           </p>
           {!isMarketPurchase && (
             <p>
@@ -126,27 +160,33 @@ function PaymentForm({
       </div>
 
       <button
-        disabled={!isConnected || isProcessing}
+        disabled={!wallet.connected || isProcessing || success}
         onClick={handlePayment}
         className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-neutral-600 disabled:cursor-not-allowed text-white font-bold py-4 px-6 rounded-lg transition-colors"
       >
-        {isProcessing ? "Processing..." : "Pay with x402"}
+        {isProcessing ? "Processing Payment..." : success ? "Payment Successful!" : "Pay with X402"}
       </button>
 
       {isProcessing && (
         <p className="text-center text-neutral-600 dark:text-neutral-400">
-          Signing payment...
+          Please confirm the transaction in your wallet...
         </p>
       )}
-      {isSuccess && !isProcessing && (
-        <p className="text-center text-green-600 dark:text-green-400">
-          Signed successfully! Verifying...
-        </p>
+
+      {success && (
+        <div className="bg-green-100 dark:bg-green-900/30 border border-green-300 dark:border-green-700 rounded-lg p-4">
+          <p className="text-center text-green-700 dark:text-green-400 font-semibold">
+            Payment successful! Redirecting...
+          </p>
+        </div>
       )}
-      {isError && (
-        <p className="text-center text-red-600 dark:text-red-400">
-          Payment failed
-        </p>
+
+      {error && (
+        <div className="bg-red-100 dark:bg-red-900/30 border border-red-300 dark:border-red-700 rounded-lg p-4">
+          <p className="text-center text-red-700 dark:text-red-400">
+            {error}
+          </p>
+        </div>
       )}
     </div>
   );
@@ -171,21 +211,18 @@ function PaywallContent() {
 
     const requirements: PaymentRequirements = {
       scheme: "exact",
-      network: "base-sepolia",
+      network: "solana-devnet", // Using Solana devnet
       maxAmountRequired: amountInSmallestUnit,
-      resource: "https://example.com",
+      resource: `https://402market.com${marketId ? `/market/${marketId}` : ''}`,
       description,
       mimeType: "application/json",
       payTo:
         process.env.NEXT_PUBLIC_X402_PAYMENT_ADDRESS ||
-        "0x2f2a4eeef6e03854595419adad319740b56a7441",
+        "9tXDC3VJhKyNsG4VQdZ1234567890abcdefghij", // Solana wallet address (placeholder)
       maxTimeoutSeconds: 600,
-      asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", // Base Sepolia USDC
+      asset: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", // USDC on Solana devnet
       outputSchema: undefined,
-      extra: {
-        name: "USDC",
-        version: "2",
-      },
+      extra: undefined, // No extra data for Solana
     };
 
     setPaymentRequirements(requirements);
@@ -211,7 +248,7 @@ function PaywallContent() {
                 Buy {outcome === 'yes' ? 'Yes' : 'No'} Tokens
               </h1>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
-                Purchase prediction market tokens using x402 protocol
+                Purchase prediction market tokens using X402 protocol on Solana
               </p>
               <div className={`rounded-xl p-4 inline-block border-2 ${
                 outcome === 'yes'
@@ -222,7 +259,7 @@ function PaywallContent() {
                 <p className={`text-3xl font-bold ${
                   outcome === 'yes' ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'
                 }`}>
-                  {amountParam} USDC worth of {outcome?.toUpperCase()} tokens
+                  ${amountParam} USDC worth of {outcome?.toUpperCase()} tokens
                 </p>
               </div>
             </>
@@ -232,7 +269,7 @@ function PaywallContent() {
                 Buy GAME$ Tokens
               </h1>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
-                Purchase tokens using x402 protocol to access games and lucky draws
+                Purchase tokens using X402 protocol on Solana
               </p>
               <div className="bg-gradient-to-r from-purple-900/30 to-blue-900/30 border border-purple-500/50 rounded-xl p-4 inline-block">
                 <p className="text-sm text-neutral-600 dark:text-neutral-400">You are purchasing</p>
@@ -244,7 +281,11 @@ function PaywallContent() {
           )}
         </div>
 
-        <PaymentForm paymentRequirements={paymentRequirements} />
+        <PaymentForm
+          paymentRequirements={paymentRequirements}
+          marketId={marketId}
+          outcome={outcome}
+        />
       </div>
     </div>
   );
