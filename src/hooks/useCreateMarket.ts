@@ -37,16 +37,17 @@ export function useCreateMarket() {
       // For simplicity, we'll use current slot + (days * 216000)
       const currentSlot = await connection.getSlot();
       const endingSlot = endDate
-        ? currentSlot + Math.floor((endDate.getTime() - Date.now()) / 1000) * 2.5 // ~2.5 slots per second
+        ? currentSlot + Math.floor((endDate.getTime() / 1000 - Date.now() / 1000)) * 2.5 // ~2.5 slots per second
         : 0; // 0 means no end date
 
       // Convert initial liquidity to lamports
       const initialLiquidity = new BN(solToLamports(initialLiquiditySol));
 
       // Generate symbols for tokens based on question
-      const baseSymbol = question.substring(0, 8).toUpperCase().replace(/[^A-Z]/g, '') || 'MKT';
-      const noSymbol = `${baseSymbol}-NO`;
-      const yesSymbol = `${baseSymbol}-YES`;
+      // Metaplex symbol max length is 10 characters
+      const baseSymbol = question.substring(0, 6).toUpperCase().replace(/[^A-Z]/g, '') || 'MKT';
+      const noSymbol = `${baseSymbol.slice(0, 7)}-NO`; // Max 10 chars: 7 + "-NO" = 10
+      const yesSymbol = `${baseSymbol.slice(0, 6)}-YES`; // Max 10 chars: 6 + "-YES" = 10
 
       // Use the team wallet from deployed config
       const teamWallet = DEPLOYED_CONFIG.teamWallet;

@@ -44,6 +44,9 @@ export function useMarkets() {
         // Fetch all Market accounts using the program
         const marketAccounts = await program.account.market.all();
 
+        // Get current slot for end date calculations
+        const currentSlot = await connection.getSlot();
+
         // Fetch creation times for all markets in parallel
         const creationTimePromises = marketAccounts.map(({ publicKey }) =>
           getAccountCreationTime(publicKey)
@@ -102,10 +105,14 @@ export function useMarkets() {
           // Calculate end date from ending slot if available
           let endDate: Date | null = null;
           if (data.endingSlot && !data.endingSlot.isZero()) {
-            // Approximate: ~2.5 slots per second on Solana
-            const slotsRemaining = data.endingSlot.toNumber();
-            const secondsRemaining = slotsRemaining / 2.5;
-            endDate = new Date(Date.now() + secondsRemaining * 1000);
+            // The endingSlot is an absolute slot number
+            // Calculate remaining slots from current slot
+            const slotsRemaining = data.endingSlot.toNumber() - currentSlot;
+            const secondsRemaining = slotsRemaining / 2.5; // ~2.5 slots per second
+            // Only set endDate if it's in the future
+            if (secondsRemaining > 0) {
+              endDate = new Date(Date.now() + secondsRemaining * 1000);
+            }
           }
 
           return {
@@ -165,6 +172,7 @@ export function useMarkets() {
  * Hook to fetch a single market by ID
  */
 export function useMarket(marketId: string | null) {
+  const { connection } = useConnection();
   const { program } = useSolanaProgram();
   const [market, setMarket] = useState<Market | null>(null);
   const [loading, setLoading] = useState(true);
@@ -183,6 +191,9 @@ export function useMarket(marketId: string | null) {
         setLoading(true);
         const marketPubkey = new PublicKey(marketId);
         const data = await program.account.market.fetch(marketPubkey);
+
+        // Get current slot for end date calculation
+        const currentSlot = await connection.getSlot();
 
         // Fetch creation time
         const createdAt = await getAccountCreationTime(marketPubkey);
@@ -226,9 +237,14 @@ export function useMarket(marketId: string | null) {
         // Calculate end date from ending slot
         let endDate: Date | null = null;
         if (data.endingSlot && !data.endingSlot.isZero()) {
-          const slotsRemaining = data.endingSlot.toNumber();
-          const secondsRemaining = slotsRemaining / 2.5;
-          endDate = new Date(Date.now() + secondsRemaining * 1000);
+          // The endingSlot is an absolute slot number
+          // Calculate remaining slots from current slot
+          const slotsRemaining = data.endingSlot.toNumber() - currentSlot;
+          const secondsRemaining = slotsRemaining / 2.5; // ~2.5 slots per second
+          // Only set endDate if it's in the future
+          if (secondsRemaining > 0) {
+            endDate = new Date(Date.now() + secondsRemaining * 1000);
+          }
         }
 
         const parsedMarket: Market = {
