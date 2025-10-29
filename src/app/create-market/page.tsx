@@ -1,38 +1,33 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import {
-  ConnectWallet,
-  Wallet,
-  WalletDropdown,
-  WalletDropdownLink,
-  WalletDropdownDisconnect,
-} from '@coinbase/onchainkit/wallet';
-import {
-  Address,
-  Avatar,
-  Name,
-  Identity,
-  EthBalance,
-} from '@coinbase/onchainkit/identity';
-import { useAccount } from 'wagmi';
-import { CATEGORIES } from '@/lib/mockData';
+import { useWallet } from '@solana/wallet-adapter-react';
+import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
+import { CATEGORIES } from '@/lib/utils';
+import { useCreateMarket } from '@/hooks/useCreateMarket';
 
 export default function CreateMarketPage() {
   const router = useRouter();
-  const { isConnected } = useAccount();
+  const wallet = useWallet();
+  const { createMarket, loading, error: createError } = useCreateMarket();
+  const [mounted, setMounted] = useState(false);
 
   const [formData, setFormData] = useState({
     question: '',
     description: '',
     category: 'Crypto',
     endDate: '',
-    initialLiquidity: '100',
+    initialLiquidity: '1',
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [txSignature, setTxSignature] = useState<string | null>(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const handleInputChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
@@ -75,20 +70,20 @@ export default function CreateMarketPage() {
     }
 
     const liquidity = parseFloat(formData.initialLiquidity);
-    if (isNaN(liquidity) || liquidity < 10) {
-      newErrors.initialLiquidity = 'Initial liquidity must be at least 10 USDC';
-    } else if (liquidity > 10000) {
-      newErrors.initialLiquidity = 'Initial liquidity cannot exceed 10,000 USDC';
+    if (isNaN(liquidity) || liquidity < 0.1) {
+      newErrors.initialLiquidity = 'Initial liquidity must be at least 0.1 SOL';
+    } else if (liquidity > 1000) {
+      newErrors.initialLiquidity = 'Initial liquidity cannot exceed 1,000 SOL';
     }
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!isConnected) {
+    if (!wallet.publicKey) {
       alert('Please connect your wallet first');
       return;
     }
@@ -97,12 +92,24 @@ export default function CreateMarketPage() {
       return;
     }
 
-    // TODO: Implement actual market creation with contract
-    console.log('Creating market with data:', formData);
+    try {
+      const endDate = formData.endDate ? new Date(formData.endDate) : null;
+      const result = await createMarket(
+        formData.question,
+        formData.description,
+        formData.category,
+        endDate,
+        parseFloat(formData.initialLiquidity)
+      );
 
-    // For now, redirect to paywall with the liquidity amount
-    // In production, this would create the market on-chain
-    router.push(`/paywall?amount=${formData.initialLiquidity}&type=create-market`);
+      setTxSignature(result.signature);
+      // Redirect to home after success
+      setTimeout(() => {
+        router.push('/');
+      }, 3000);
+    } catch (err) {
+      console.error('Failed to create market:', err);
+    }
   };
 
   const minDate = new Date();
@@ -121,31 +128,7 @@ export default function CreateMarketPage() {
               </h1>
             </Link>
 
-            <div className="wallet-container">
-              <Wallet>
-                <ConnectWallet>
-                  <Avatar className="h-6 w-6" />
-                  <Name />
-                </ConnectWallet>
-                <WalletDropdown>
-                  <Identity className="px-4 pt-3 pb-2" hasCopyAddressOnClick>
-                    <Avatar />
-                    <Name />
-                    <Address />
-                    <EthBalance />
-                  </Identity>
-                  <WalletDropdownLink
-                    icon="wallet"
-                    href="https://keys.coinbase.com"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    Wallet
-                  </WalletDropdownLink>
-                  <WalletDropdownDisconnect />
-                </WalletDropdown>
-              </Wallet>
-            </div>
+            {mounted && <WalletMultiButton className="!bg-blue-600 hover:!bg-blue-700 !rounded-lg !h-10" />}
           </div>
         </div>
       </header>
@@ -165,15 +148,44 @@ export default function CreateMarketPage() {
             Create New Market
           </h1>
           <p className="text-neutral-600 dark:text-neutral-400">
-            Create a prediction market and provide initial liquidity using x402 protocol
+            Create a prediction market and provide initial liquidity on Solana
           </p>
         </div>
 
         {/* Wallet Connection Notice */}
-        {!isConnected && (
+        {!wallet.publicKey && (
           <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 mb-6">
             <p className="text-yellow-800 dark:text-yellow-200 text-sm">
               ⚠️ Please connect your wallet to create a market
+            </p>
+          </div>
+        )}
+
+        {/* Success Message */}
+        {txSignature && (
+          <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4 mb-6">
+            <p className="text-green-800 dark:text-green-200 font-semibold mb-2">
+              Market created successfully!
+            </p>
+            <a
+              href={`https://explorer.solana.com/tx/${txSignature}?cluster=devnet`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm text-blue-600 dark:text-blue-400 hover:underline break-all"
+            >
+              View on Solana Explorer
+            </a>
+            <p className="text-sm text-green-700 dark:text-green-300 mt-2">
+              Redirecting to home...
+            </p>
+          </div>
+        )}
+
+        {/* Error Message */}
+        {createError && (
+          <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4 mb-6">
+            <p className="text-red-800 dark:text-red-200 text-sm">
+              {createError.message}
             </p>
           </div>
         )}
@@ -283,17 +295,17 @@ export default function CreateMarketPage() {
           {/* Initial Liquidity */}
           <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-lg p-6">
             <label className="block text-neutral-900 dark:text-neutral-100 font-semibold mb-2">
-              Initial Liquidity (USDC) *
+              Initial Liquidity (SOL) *
             </label>
             <input
               type="number"
               name="initialLiquidity"
               value={formData.initialLiquidity}
               onChange={handleInputChange}
-              min="10"
-              max="10000"
-              step="1"
-              placeholder="100"
+              min="0.1"
+              max="1000"
+              step="0.1"
+              placeholder="1"
               className={`w-full px-4 py-3 bg-neutral-50 dark:bg-neutral-800 border ${
                 errors.initialLiquidity
                   ? 'border-red-500'
@@ -306,7 +318,7 @@ export default function CreateMarketPage() {
               </p>
             )}
             <p className="text-neutral-500 dark:text-neutral-400 text-sm mt-1">
-              Minimum: 10 USDC | Maximum: 10,000 USDC
+              Minimum: 0.1 SOL | Maximum: 1,000 SOL
             </p>
           </div>
 
@@ -316,10 +328,10 @@ export default function CreateMarketPage() {
               What happens next?
             </h3>
             <ul className="text-sm text-blue-800 dark:text-blue-200 space-y-1">
-              <li>• You'll be redirected to pay the initial liquidity via x402 protocol</li>
-              <li>• Your market will be created on-chain (once contracts are deployed)</li>
+              <li>• Your market will be created on Solana blockchain</li>
+              <li>• Initial liquidity will be added to the market</li>
               <li>• Users can immediately start trading on your market</li>
-              <li>• You'll earn fees from trading activity</li>
+              <li>• You'll earn fees from trading activity as a liquidity provider</li>
             </ul>
           </div>
 
@@ -333,10 +345,10 @@ export default function CreateMarketPage() {
             </Link>
             <button
               type="submit"
-              disabled={!isConnected}
+              disabled={!wallet.publicKey || loading || !!txSignature}
               className="flex-1 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 disabled:from-neutral-400 disabled:to-neutral-400 disabled:cursor-not-allowed text-white font-bold py-4 px-6 rounded-lg transition-colors"
             >
-              {isConnected ? 'Create Market' : 'Connect Wallet First'}
+              {!wallet.publicKey ? 'Connect Wallet First' : loading ? 'Creating Market...' : txSignature ? 'Market Created!' : 'Create Market'}
             </button>
           </div>
         </form>

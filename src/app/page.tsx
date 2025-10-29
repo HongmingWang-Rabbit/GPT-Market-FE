@@ -1,32 +1,42 @@
 'use client';
 
-import {
-  ConnectWallet,
-  Wallet,
-  WalletDropdown,
-  WalletDropdownLink,
-  WalletDropdownDisconnect,
-} from '@coinbase/onchainkit/wallet';
-import {
-  Address,
-  Avatar,
-  Name,
-  Identity,
-  EthBalance,
-} from '@coinbase/onchainkit/identity';
-import { useState } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import Link from 'next/link';
+import { useWallet } from '@solana/wallet-adapter-react';
+import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import MarketCard from '@/components/MarketCard';
-import { MOCK_MARKETS, CATEGORIES, getMarketsByCategory } from '@/lib/mockData';
+import { useMarkets } from '@/hooks/useMarkets';
+import { CATEGORIES } from '@/lib/utils';
 
 export default function HomePage() {
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
+  const { markets, loading, error } = useMarkets();
+  const wallet = useWallet();
+  const [mounted, setMounted] = useState(false);
 
-  const filteredMarkets = getMarketsByCategory(selectedCategory).filter(market =>
-    market.question.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    market.description.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  const filteredMarkets = useMemo(() => {
+    let filtered = markets;
+
+    // Filter by category
+    if (selectedCategory !== 'All') {
+      filtered = filtered.filter(m => m.category === selectedCategory);
+    }
+
+    // Filter by search query
+    if (searchQuery) {
+      filtered = filtered.filter(market =>
+        market.question.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        market.description.toLowerCase().includes(searchQuery.toLowerCase())
+      );
+    }
+
+    return filtered;
+  }, [markets, selectedCategory, searchQuery]);
 
   return (
     <div className="flex flex-col min-h-screen font-sans bg-neutral-50 dark:bg-neutral-950">
@@ -62,31 +72,7 @@ export default function HomePage() {
               </Link>
 
               {/* Wallet Connection */}
-              <div className="wallet-container">
-                <Wallet>
-                  <ConnectWallet>
-                    <Avatar className="h-6 w-6" />
-                    <Name />
-                  </ConnectWallet>
-                  <WalletDropdown>
-                    <Identity className="px-4 pt-3 pb-2" hasCopyAddressOnClick>
-                      <Avatar />
-                      <Name />
-                      <Address />
-                      <EthBalance />
-                    </Identity>
-                    <WalletDropdownLink
-                      icon="wallet"
-                      href="https://keys.coinbase.com"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      Wallet
-                    </WalletDropdownLink>
-                    <WalletDropdownDisconnect />
-                  </WalletDropdown>
-                </Wallet>
-              </div>
+              {mounted && <WalletMultiButton className="!bg-blue-600 hover:!bg-blue-700 !rounded-lg !h-10" />}
             </div>
           </div>
 
@@ -137,14 +123,33 @@ export default function HomePage() {
           ))}
         </div>
 
+        {/* Loading State */}
+        {loading && (
+          <div className="text-center py-16">
+            <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+            <p className="text-neutral-600 dark:text-neutral-400 mt-4">Loading markets...</p>
+          </div>
+        )}
+
+        {/* Error State */}
+        {error && (
+          <div className="text-center py-16">
+            <p className="text-red-600 dark:text-red-400 mb-2">Error loading markets</p>
+            <p className="text-sm text-neutral-500">{error.message}</p>
+          </div>
+        )}
+
         {/* Markets Grid */}
-        {filteredMarkets.length > 0 ? (
+        {!loading && !error && filteredMarkets.length > 0 && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {filteredMarkets.map((market) => (
               <MarketCard key={market.id} market={market} />
             ))}
           </div>
-        ) : (
+        )}
+
+        {/* No Results */}
+        {!loading && !error && filteredMarkets.length === 0 && markets.length > 0 && (
           <div className="text-center py-16">
             <p className="text-neutral-500 dark:text-neutral-400 text-lg">
               No markets found matching your search.
@@ -152,39 +157,56 @@ export default function HomePage() {
           </div>
         )}
 
+        {/* No Markets at All */}
+        {!loading && !error && markets.length === 0 && (
+          <div className="text-center py-16">
+            <p className="text-neutral-500 dark:text-neutral-400 text-lg mb-4">
+              No markets created yet. Be the first!
+            </p>
+            <Link
+              href="/create-market"
+              className="inline-block px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-semibold rounded-lg transition-colors"
+            >
+              Create Market
+            </Link>
+          </div>
+        )}
+
         {/* Stats Section */}
-        <div className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-lg p-6">
-            <div className="text-sm text-neutral-600 dark:text-neutral-400 mb-1">
-              Total Volume (24h)
+        {!loading && !error && markets.length > 0 && (
+          <div className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-lg p-6">
+              <div className="text-sm text-neutral-600 dark:text-neutral-400 mb-1">
+                Total Volume (24h)
+              </div>
+              <div className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">
+                ${(markets.reduce((sum, m) => sum + m.volume, 0) / 1000000).toFixed(1)}M
+              </div>
             </div>
-            <div className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">
-              ${(MOCK_MARKETS.reduce((sum, m) => sum + m.volume, 0) / 1000000).toFixed(1)}M
+            <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-lg p-6">
+              <div className="text-sm text-neutral-600 dark:text-neutral-400 mb-1">
+                Active Markets
+              </div>
+              <div className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">
+                {markets.filter(m => m.status === 'active').length}
+              </div>
+            </div>
+            <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-lg p-6">
+              <div className="text-sm text-neutral-600 dark:text-neutral-400 mb-1">
+                Total Liquidity
+              </div>
+              <div className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">
+                ${(markets.reduce((sum, m) => sum + m.liquidity, 0) / 1000000).toFixed(1)}M
+              </div>
             </div>
           </div>
-          <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-lg p-6">
-            <div className="text-sm text-neutral-600 dark:text-neutral-400 mb-1">
-              Active Markets
-            </div>
-            <div className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">
-              {MOCK_MARKETS.filter(m => m.status === 'active').length}
-            </div>
-          </div>
-          <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-lg p-6">
-            <div className="text-sm text-neutral-600 dark:text-neutral-400 mb-1">
-              Total Liquidity
-            </div>
-            <div className="text-3xl font-bold text-neutral-900 dark:text-neutral-100">
-              ${(MOCK_MARKETS.reduce((sum, m) => sum + m.liquidity, 0) / 1000000).toFixed(1)}M
-            </div>
-          </div>
-        </div>
+        )}
       </main>
 
       {/* Footer */}
       <footer className="mt-16 border-t border-neutral-200 dark:border-neutral-800 py-8">
         <div className="max-w-7xl mx-auto px-4 text-center text-sm text-neutral-500 dark:text-neutral-400">
-          <p>Powered by x402 Protocol • Decentralized Prediction Markets</p>
+          <p>Powered by Solana • Decentralized Prediction Markets</p>
         </div>
       </footer>
     </div>

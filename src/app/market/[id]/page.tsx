@@ -1,40 +1,84 @@
-'use client';
+"use client";
 
-import { useParams, useRouter } from 'next/navigation';
-import { useState } from 'react';
-import { getMarketById, formatVolume, formatProbability } from '@/lib/mockData';
-import {
-  ConnectWallet,
-  Wallet,
-  WalletDropdown,
-  WalletDropdownLink,
-  WalletDropdownDisconnect,
-} from '@coinbase/onchainkit/wallet';
-import {
-  Address,
-  Avatar,
-  Name,
-  Identity,
-  EthBalance,
-} from '@coinbase/onchainkit/identity';
-import Link from 'next/link';
+import { useParams, useRouter } from "next/navigation";
+import { useState, useEffect } from "react";
+import { formatVolume, formatProbability, getSolscanUrl } from "@/lib/utils";
+import { useWallet } from "@solana/wallet-adapter-react";
+import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import { useMarket } from "@/hooks/useMarkets";
+import { useSwap } from "@/hooks/useSwap";
+import { useTokenBalance } from "@/hooks/useTokenBalance";
+import { useLiquidity } from "@/hooks/useLiquidity";
+import Link from "next/link";
 
 export default function MarketDetailPage() {
   const params = useParams();
   const router = useRouter();
-  const market = getMarketById(params.id as string);
+  const wallet = useWallet();
+  const {
+    market,
+    loading: marketLoading,
+    error: marketError,
+  } = useMarket(params.id as string);
+  const { buyTokens, loading: swapLoading, error: swapError } = useSwap();
+  const {
+    addLiquidity,
+    withdrawLiquidity,
+    loading: liquidityLoading,
+  } = useLiquidity();
+  const {
+    yesBalance,
+    noBalance,
+    loading: balanceLoading,
+  } = useTokenBalance(
+    market?.yesTokenMint || null,
+    market?.noTokenMint || null
+  );
+  const [mounted, setMounted] = useState(false);
 
-  const [selectedOutcome, setSelectedOutcome] = useState<'yes' | 'no' | null>(null);
-  const [usdcAmount, setUsdcAmount] = useState('');
+  const [selectedOutcome, setSelectedOutcome] = useState<"yes" | "no" | null>(
+    null
+  );
+  const [solAmount, setSolAmount] = useState("");
   const [showBuyModal, setShowBuyModal] = useState(false);
+  const [txSignature, setTxSignature] = useState<string | null>(null);
 
-  if (!market) {
+  // Liquidity management state
+  const [showLiquidityModal, setShowLiquidityModal] = useState(false);
+  const [liquidityAction, setLiquidityAction] = useState<"add" | "withdraw">(
+    "add"
+  );
+  const [liquidityAmount, setLiquidityAmount] = useState("");
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (marketLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-neutral-50 dark:bg-neutral-950">
+        <div className="text-center">
+          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+          <p className="text-neutral-600 dark:text-neutral-400 mt-4">
+            Loading market...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (marketError || !market) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-neutral-50 dark:bg-neutral-950">
         <div className="text-center">
           <h1 className="text-2xl font-bold text-neutral-900 dark:text-neutral-100 mb-4">
-            Market not found
+            {marketError ? "Error loading market" : "Market not found"}
           </h1>
+          {marketError && (
+            <p className="text-sm text-neutral-500 mb-4">
+              {marketError.message}
+            </p>
+          )}
           <Link
             href="/"
             className="text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
@@ -46,31 +90,97 @@ export default function MarketDetailPage() {
     );
   }
 
-  const daysUntilEnd = Math.ceil(
-    (market.endDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24)
-  );
+  const daysUntilEnd = market.endDate
+    ? Math.ceil((market.endDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+    : null;
 
-  const handleBuyClick = (outcome: 'yes' | 'no') => {
+  const handleBuyClick = (outcome: "yes" | "no") => {
     setSelectedOutcome(outcome);
     setShowBuyModal(true);
   };
 
-  const handleConfirmPurchase = () => {
-    const amount = parseFloat(usdcAmount);
-    if (amount > 0 && selectedOutcome) {
-      // Redirect to paywall with market info
-      router.push(`/paywall?amount=${amount}&marketId=${market.id}&outcome=${selectedOutcome}`);
+  const handleConfirmPurchase = async () => {
+    const amount = parseFloat(solAmount);
+    if (amount > 0 && selectedOutcome && wallet.publicKey) {
+      try {
+        // Get team wallet from market data (creator)
+        const teamWallet = market.creator.toString();
+
+        const signature = await buyTokens(
+          market.id,
+          market.yesTokenMint.toString(),
+          market.noTokenMint.toString(),
+          selectedOutcome,
+          amount,
+          teamWallet
+        );
+
+        setTxSignature(signature);
+        // Close modal and show success
+        setTimeout(() => {
+          setShowBuyModal(false);
+          setSolAmount("");
+          setSelectedOutcome(null);
+          setTxSignature(null);
+        }, 3000);
+      } catch (err) {
+        console.error("Purchase failed:", err);
+      }
     }
   };
 
+  const handleLiquidityAction = async () => {
+    const amount = parseFloat(liquidityAmount);
+    if (amount > 0 && wallet.publicKey) {
+      try {
+        const teamWallet = market.creator.toString();
+
+        let signature;
+        if (liquidityAction === "add") {
+          signature = await addLiquidity(
+            market.id,
+            market.yesTokenMint.toString(),
+            market.noTokenMint.toString(),
+            amount,
+            teamWallet
+          );
+        } else {
+          signature = await withdrawLiquidity(
+            market.id,
+            market.yesTokenMint.toString(),
+            market.noTokenMint.toString(),
+            amount,
+            teamWallet
+          );
+        }
+
+        setTxSignature(signature);
+        // Close modal and show success
+        setTimeout(() => {
+          setShowLiquidityModal(false);
+          setLiquidityAmount("");
+          setTxSignature(null);
+          // Reload the page to refresh market data
+          window.location.reload();
+        }, 3000);
+      } catch (err) {
+        console.error("Liquidity action failed:", err);
+      }
+    }
+  };
+
+  const isMarketCreator =
+    wallet.publicKey &&
+    market &&
+    wallet.publicKey.toString() === market.creator.toString();
+
   const calculateShares = () => {
-    const amount = parseFloat(usdcAmount) || 0;
-    const price = selectedOutcome === 'yes' ? market.yesPrice : market.noPrice;
+    const amount = parseFloat(solAmount) || 0;
+    const price = selectedOutcome === "yes" ? market.yesPrice : market.noPrice;
     return (amount / price).toFixed(2);
   };
 
   const potentialReturn = () => {
-    const amount = parseFloat(usdcAmount) || 0;
     const shares = parseFloat(calculateShares());
     return shares.toFixed(2);
   };
@@ -87,31 +197,9 @@ export default function MarketDetailPage() {
               </h1>
             </Link>
 
-            <div className="wallet-container">
-              <Wallet>
-                <ConnectWallet>
-                  <Avatar className="h-6 w-6" />
-                  <Name />
-                </ConnectWallet>
-                <WalletDropdown>
-                  <Identity className="px-4 pt-3 pb-2" hasCopyAddressOnClick>
-                    <Avatar />
-                    <Name />
-                    <Address />
-                    <EthBalance />
-                  </Identity>
-                  <WalletDropdownLink
-                    icon="wallet"
-                    href="https://keys.coinbase.com"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    Wallet
-                  </WalletDropdownLink>
-                  <WalletDropdownDisconnect />
-                </WalletDropdown>
-              </Wallet>
-            </div>
+            {mounted && (
+              <WalletMultiButton className="!bg-blue-600 hover:!bg-blue-700 !rounded-lg !h-10" />
+            )}
           </div>
         </div>
       </header>
@@ -134,7 +222,11 @@ export default function MarketDetailPage() {
                   {market.category}
                 </span>
                 <span className="text-sm text-neutral-500 dark:text-neutral-400">
-                  {daysUntilEnd > 0 ? `Closes in ${daysUntilEnd} days` : 'Closed'}
+                  {daysUntilEnd !== null && daysUntilEnd > 0
+                    ? `Closes in ${daysUntilEnd} days`
+                    : market.status === "closed"
+                    ? "Closed"
+                    : "Active"}
                 </span>
               </div>
               <h1 className="text-3xl font-bold text-neutral-900 dark:text-neutral-100 mb-3">
@@ -175,6 +267,135 @@ export default function MarketDetailPage() {
           </div>
         </div>
 
+        {/* User Holdings */}
+        {wallet.publicKey && !balanceLoading && (
+          <div className="mb-6 bg-gradient-to-r from-purple-50 to-blue-50 dark:from-purple-900/20 dark:to-blue-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-lg font-bold text-neutral-900 dark:text-neutral-100">
+                Your Holdings
+              </h3>
+              {yesBalance === 0 && noBalance === 0 && (
+                <span className="text-sm text-neutral-500 dark:text-neutral-400">
+                  No tokens yet
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-white/50 dark:bg-neutral-800/50 rounded-lg p-3">
+                <div className="text-sm text-neutral-600 dark:text-neutral-400 mb-1">
+                  YES Tokens
+                </div>
+                <div className="text-2xl font-bold text-green-600 dark:text-green-400">
+                  {yesBalance.toFixed(2)}
+                </div>
+                <div className="text-xs text-neutral-500 dark:text-neutral-400 mt-1">
+                  Value: ~${(yesBalance * market.yesPrice).toFixed(2)}
+                </div>
+              </div>
+              <div className="bg-white/50 dark:bg-neutral-800/50 rounded-lg p-3">
+                <div className="text-sm text-neutral-600 dark:text-neutral-400 mb-1">
+                  NO Tokens
+                </div>
+                <div className="text-2xl font-bold text-red-600 dark:text-red-400">
+                  {noBalance.toFixed(2)}
+                </div>
+                <div className="text-xs text-neutral-500 dark:text-neutral-400 mt-1">
+                  Value: ~${(noBalance * market.noPrice).toFixed(2)}
+                </div>
+              </div>
+            </div>
+            <div className="mt-3 pt-3 border-t border-purple-200 dark:border-purple-800">
+              <div className="flex justify-between text-sm">
+                <span className="text-neutral-600 dark:text-neutral-400">
+                  Total Value:
+                </span>
+                <span className="font-bold text-neutral-900 dark:text-neutral-100">
+                  ~$
+                  {(
+                    yesBalance * market.yesPrice +
+                    noBalance * market.noPrice
+                  ).toFixed(2)}
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Market Creator Controls - Not Implemented Warning */}
+        {isMarketCreator && (
+          <div className="mb-6 bg-red-50 dark:bg-red-900/20 border-2 border-red-400 dark:border-red-700 rounded-lg p-4">
+            <div className="flex items-start gap-3">
+              <div className="text-2xl">⚠️</div>
+              <div className="flex-1">
+                <h3 className="text-lg font-bold text-red-900 dark:text-red-200 mb-2">
+                  Smart Contract Not Fully Implemented
+                </h3>
+                <p className="text-sm text-red-800 dark:text-red-300 mb-3">
+                  The following functions in the Solana program are currently{" "}
+                  <strong>placeholder implementations</strong> that do nothing:
+                </p>
+                <ul className="text-sm text-red-800 dark:text-red-300 mb-3 ml-4 list-disc space-y-1">
+                  <li>
+                    <code className="bg-red-100 dark:bg-red-900 px-1 rounded">
+                      add_liquidity
+                    </code>{" "}
+                    - Cannot add SOL to market reserves
+                  </li>
+                  <li>
+                    <code className="bg-red-100 dark:bg-red-900 px-1 rounded">
+                      withdraw_liquidity
+                    </code>{" "}
+                    - Cannot withdraw SOL from reserves
+                  </li>
+                  <li>
+                    <code className="bg-red-100 dark:bg-red-900 px-1 rounded">
+                      resolution
+                    </code>{" "}
+                    - Cannot resolve market or distribute winnings
+                  </li>
+                </ul>
+                <p className="text-sm text-red-800 dark:text-red-300 mb-3">
+                  Current Liquidity: <strong>{formatVolume(market.liquidity)}</strong> | Status:{" "}
+                  <strong>
+                    {market.status.charAt(0).toUpperCase() + market.status.slice(1)}
+                  </strong>
+                </p>
+                <div className="text-xs text-red-700 dark:text-red-400 bg-red-100 dark:bg-red-900/50 p-3 rounded">
+                  <strong>For developers:</strong> See{" "}
+                  <code className="bg-red-200 dark:bg-red-950 px-1 rounded">
+                    contract_source_code/programs/prediction-market/src/state/market.rs:392-438
+                  </code>
+                  <br />
+                  All these functions just return{" "}
+                  <code className="bg-red-200 dark:bg-red-950 px-1 rounded">
+                    Ok(())
+                  </code>{" "}
+                  without any actual implementation. The smart contract needs to be
+                  completed before these features will work.
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Liquidity Warning */}
+        {market.liquidity === 0 && !isMarketCreator && (
+          <div className="mb-6 bg-yellow-50 dark:bg-yellow-900/20 border-2 border-yellow-400 dark:border-yellow-700 rounded-lg p-4">
+            <div className="flex items-start gap-3">
+              <div className="text-2xl">⚠️</div>
+              <div className="flex-1">
+                <h3 className="text-lg font-bold text-yellow-900 dark:text-yellow-200 mb-2">
+                  No Liquidity Available
+                </h3>
+                <p className="text-sm text-yellow-800 dark:text-yellow-300">
+                  This market has no liquidity (0 SOL in reserves). Trading is
+                  not possible until the market creator adds initial liquidity.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Trading Interface */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* Yes Card */}
@@ -193,10 +414,15 @@ export default function MarketDetailPage() {
               </div>
             </div>
             <button
-              onClick={() => handleBuyClick('yes')}
-              className="w-full bg-green-600 hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-600 text-white font-bold py-3 px-6 rounded-lg transition-colors"
+              onClick={() => handleBuyClick("yes")}
+              disabled={market.liquidity === 0 || swapLoading}
+              className={`w-full font-bold py-3 px-6 rounded-lg transition-colors ${
+                market.liquidity === 0 || swapLoading
+                  ? "bg-gray-400 cursor-not-allowed text-gray-200"
+                  : "bg-green-600 hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-600 text-white"
+              }`}
             >
-              Buy Yes
+              {market.liquidity === 0 ? "No Liquidity" : "Buy Yes"}
             </button>
           </div>
 
@@ -216,10 +442,15 @@ export default function MarketDetailPage() {
               </div>
             </div>
             <button
-              onClick={() => handleBuyClick('no')}
-              className="w-full bg-red-600 hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600 text-white font-bold py-3 px-6 rounded-lg transition-colors"
+              onClick={() => handleBuyClick("no")}
+              disabled={market.liquidity === 0 || swapLoading}
+              className={`w-full font-bold py-3 px-6 rounded-lg transition-colors ${
+                market.liquidity === 0 || swapLoading
+                  ? "bg-gray-400 cursor-not-allowed text-gray-200"
+                  : "bg-red-600 hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600 text-white"
+              }`}
             >
-              Buy No
+              {market.liquidity === 0 ? "No Liquidity" : "Buy No"}
             </button>
           </div>
         </div>
@@ -234,14 +465,74 @@ export default function MarketDetailPage() {
               <strong>Category:</strong> {market.category}
             </p>
             <p>
-              <strong>End Date:</strong> {market.endDate.toLocaleDateString('en-US', {
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric'
-              })}
+              <strong>Market Address:</strong>{" "}
+              <a
+                href={getSolscanUrl(market.address.toString(), "account")}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 dark:text-blue-400 hover:underline"
+              >
+                {market.address.toString().slice(0, 8)}...
+                {market.address.toString().slice(-8)}
+              </a>
+            </p>
+            {market.yesTokenMint.toString() !==
+              "11111111111111111111111111111111" && (
+              <>
+                <p>
+                  <strong>YES Token:</strong>{" "}
+                  <a
+                    href={getSolscanUrl(
+                      market.yesTokenMint.toString(),
+                      "token"
+                    )}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-600 dark:text-blue-400 hover:underline"
+                  >
+                    {market.yesTokenMint.toString().slice(0, 8)}...
+                    {market.yesTokenMint.toString().slice(-8)}
+                  </a>
+                </p>
+                <p>
+                  <strong>NO Token:</strong>{" "}
+                  <a
+                    href={getSolscanUrl(market.noTokenMint.toString(), "token")}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-600 dark:text-blue-400 hover:underline"
+                  >
+                    {market.noTokenMint.toString().slice(0, 8)}...
+                    {market.noTokenMint.toString().slice(-8)}
+                  </a>
+                </p>
+              </>
+            )}
+            <p>
+              <strong>Creator:</strong>{" "}
+              <a
+                href={getSolscanUrl(market.creator.toString(), "account")}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 dark:text-blue-400 hover:underline"
+              >
+                {market.creator.toString().slice(0, 8)}...
+                {market.creator.toString().slice(-8)}
+              </a>
             </p>
             <p>
-              <strong>Status:</strong> {market.status.charAt(0).toUpperCase() + market.status.slice(1)}
+              <strong>End Date:</strong>{" "}
+              {market.endDate
+                ? market.endDate.toLocaleDateString("en-US", {
+                    year: "numeric",
+                    month: "long",
+                    day: "numeric",
+                  })
+                : "No end date"}
+            </p>
+            <p>
+              <strong>Status:</strong>{" "}
+              {market.status.charAt(0).toUpperCase() + market.status.slice(1)}
             </p>
           </div>
         </div>
@@ -252,7 +543,7 @@ export default function MarketDetailPage() {
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
           <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-8 max-w-md w-full">
             <h2 className="text-3xl font-bold mb-6 text-neutral-900 dark:text-neutral-100">
-              Buy {selectedOutcome === 'yes' ? 'Yes' : 'No'} Tokens
+              Buy {selectedOutcome === "yes" ? "Yes" : "No"} Tokens
             </h2>
 
             <div className="space-y-6">
@@ -269,62 +560,67 @@ export default function MarketDetailPage() {
               {/* Amount Input */}
               <div>
                 <label className="block text-neutral-700 dark:text-neutral-300 mb-2 font-semibold">
-                  Enter USDC Amount
+                  Enter SOL Amount
                 </label>
 
                 {/* Quick Amount Buttons */}
                 <div className="grid grid-cols-4 gap-2 mb-3">
-                  {[5, 10, 25, 50].map((amount) => (
+                  {[0.1, 0.5, 1, 2].map((amount) => (
                     <button
                       key={amount}
                       type="button"
-                      onClick={() => setUsdcAmount(amount.toString())}
+                      onClick={() => setSolAmount(amount.toString())}
                       className={`py-2 px-3 rounded-lg font-medium text-sm transition-colors ${
-                        usdcAmount === amount.toString()
-                          ? selectedOutcome === 'yes'
-                            ? 'bg-green-600 text-white'
-                            : 'bg-red-600 text-white'
-                          : 'bg-neutral-200 dark:bg-neutral-700 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-300 dark:hover:bg-neutral-600'
+                        solAmount === amount.toString()
+                          ? selectedOutcome === "yes"
+                            ? "bg-green-600 text-white"
+                            : "bg-red-600 text-white"
+                          : "bg-neutral-200 dark:bg-neutral-700 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-300 dark:hover:bg-neutral-600"
                       }`}
                     >
-                      ${amount}
+                      {amount} SOL
                     </button>
                   ))}
                 </div>
 
                 <input
                   type="number"
-                  min="1"
+                  min="0.01"
                   step="0.01"
-                  value={usdcAmount}
-                  onChange={(e) => setUsdcAmount(e.target.value)}
+                  value={solAmount}
+                  onChange={(e) => setSolAmount(e.target.value)}
                   placeholder="0.00"
                   className="w-full bg-neutral-100 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-neutral-900 dark:text-neutral-100 text-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
                 <p className="text-neutral-500 dark:text-neutral-400 text-sm mt-1">
-                  Minimum: 1 USDC
+                  Minimum: 0.01 SOL
                 </p>
               </div>
 
               {/* Calculation */}
-              {usdcAmount && parseFloat(usdcAmount) > 0 && (
-                <div className={`rounded-xl p-4 ${
-                  selectedOutcome === 'yes'
-                    ? 'bg-green-100 dark:bg-green-900/30 border border-green-300 dark:border-green-700'
-                    : 'bg-red-100 dark:bg-red-900/30 border border-red-300 dark:border-red-700'
-                }`}>
+              {solAmount && parseFloat(solAmount) > 0 && (
+                <div
+                  className={`rounded-xl p-4 ${
+                    selectedOutcome === "yes"
+                      ? "bg-green-100 dark:bg-green-900/30 border border-green-300 dark:border-green-700"
+                      : "bg-red-100 dark:bg-red-900/30 border border-red-300 dark:border-red-700"
+                  }`}
+                >
                   <div className="space-y-2 text-sm">
                     <div className="flex items-center justify-between">
                       <span className="text-neutral-700 dark:text-neutral-300">
                         Price per share:
                       </span>
                       <span className="font-bold text-neutral-900 dark:text-neutral-100">
-                        ${selectedOutcome === 'yes' ? market.yesPrice.toFixed(2) : market.noPrice.toFixed(2)}
+                        {selectedOutcome === "yes"
+                          ? market.yesPrice.toFixed(4)
+                          : market.noPrice.toFixed(4)}{" "}
+                        SOL
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
                       <span className="text-neutral-700 dark:text-neutral-300">
-                        Shares you'll get:
+                        Shares you&apos;ll get:
                       </span>
                       <span className="font-bold text-neutral-900 dark:text-neutral-100">
                         {calculateShares()}
@@ -335,10 +631,44 @@ export default function MarketDetailPage() {
                         Potential return:
                       </span>
                       <span className="text-lg font-bold text-neutral-900 dark:text-neutral-100">
-                        ${potentialReturn()} USDC
+                        {potentialReturn()} shares
                       </span>
                     </div>
                   </div>
+                </div>
+              )}
+
+              {/* Transaction Status */}
+              {swapLoading && (
+                <div className="text-center py-4">
+                  <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                  <p className="text-sm text-neutral-600 dark:text-neutral-400 mt-2">
+                    Processing transaction...
+                  </p>
+                </div>
+              )}
+
+              {txSignature && (
+                <div className="bg-green-100 dark:bg-green-900/30 border border-green-300 dark:border-green-700 rounded-lg p-4">
+                  <p className="text-green-700 dark:text-green-400 font-semibold mb-2">
+                    Transaction successful!
+                  </p>
+                  <a
+                    href={`https://explorer.solana.com/tx/${txSignature}?cluster=devnet`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm text-blue-600 dark:text-blue-400 hover:underline break-all"
+                  >
+                    View on Solana Explorer
+                  </a>
+                </div>
+              )}
+
+              {swapError && (
+                <div className="bg-red-100 dark:bg-red-900/30 border border-red-300 dark:border-red-700 rounded-lg p-4">
+                  <p className="text-red-700 dark:text-red-400 text-sm">
+                    {swapError.message}
+                  </p>
                 </div>
               )}
 
@@ -347,23 +677,192 @@ export default function MarketDetailPage() {
                 <button
                   onClick={() => {
                     setShowBuyModal(false);
-                    setUsdcAmount('');
+                    setSolAmount("");
                     setSelectedOutcome(null);
+                    setTxSignature(null);
                   }}
-                  className="flex-1 bg-neutral-200 dark:bg-neutral-700 hover:bg-neutral-300 dark:hover:bg-neutral-600 text-neutral-900 dark:text-neutral-100 font-bold py-3 px-6 rounded-lg transition-colors"
+                  disabled={swapLoading}
+                  className="flex-1 bg-neutral-200 dark:bg-neutral-700 hover:bg-neutral-300 dark:hover:bg-neutral-600 text-neutral-900 dark:text-neutral-100 font-bold py-3 px-6 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleConfirmPurchase}
-                  disabled={!usdcAmount || parseFloat(usdcAmount) < 1}
+                  disabled={
+                    !wallet.publicKey ||
+                    !solAmount ||
+                    parseFloat(solAmount) < 0.01 ||
+                    swapLoading ||
+                    !!txSignature
+                  }
                   className={`flex-1 font-bold py-3 px-6 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                    selectedOutcome === 'yes'
-                      ? 'bg-green-600 hover:bg-green-700 text-white'
-                      : 'bg-red-600 hover:bg-red-700 text-white'
+                    selectedOutcome === "yes"
+                      ? "bg-green-600 hover:bg-green-700 text-white"
+                      : "bg-red-600 hover:bg-red-700 text-white"
                   }`}
                 >
-                  Continue with x402
+                  {!wallet.publicKey
+                    ? "Connect Wallet"
+                    : swapLoading
+                    ? "Processing..."
+                    : txSignature
+                    ? "Success!"
+                    : "Buy Tokens"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Liquidity Modal */}
+      {showLiquidityModal && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-8 max-w-md w-full">
+            <h2 className="text-3xl font-bold mb-6 text-neutral-900 dark:text-neutral-100">
+              {liquidityAction === "add" ? "Add" : "Withdraw"} Liquidity
+            </h2>
+
+            <div className="space-y-6">
+              {/* Market Info */}
+              <div className="bg-neutral-100 dark:bg-neutral-800 rounded-lg p-4">
+                <p className="text-sm text-neutral-600 dark:text-neutral-400 mb-1">
+                  Market
+                </p>
+                <p className="font-semibold text-neutral-900 dark:text-neutral-100 line-clamp-2">
+                  {market.question}
+                </p>
+                <p className="text-sm text-neutral-600 dark:text-neutral-400 mt-2">
+                  Current Liquidity: {formatVolume(market.liquidity)}
+                </p>
+              </div>
+
+              {/* Amount Input */}
+              <div>
+                <label className="block text-neutral-700 dark:text-neutral-300 mb-2 font-semibold">
+                  Enter SOL Amount
+                </label>
+
+                {/* Quick Amount Buttons */}
+                <div className="grid grid-cols-4 gap-2 mb-3">
+                  {[0.5, 1, 5, 10].map((amount) => (
+                    <button
+                      key={amount}
+                      type="button"
+                      onClick={() => setLiquidityAmount(amount.toString())}
+                      className={`py-2 px-3 rounded-lg font-medium text-sm transition-colors ${
+                        liquidityAmount === amount.toString()
+                          ? liquidityAction === "add"
+                            ? "bg-green-600 text-white"
+                            : "bg-orange-600 text-white"
+                          : "bg-neutral-200 dark:bg-neutral-700 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-300 dark:hover:bg-neutral-600"
+                      }`}
+                    >
+                      {amount} SOL
+                    </button>
+                  ))}
+                </div>
+
+                <input
+                  type="number"
+                  min="0.1"
+                  step="0.1"
+                  value={liquidityAmount}
+                  onChange={(e) => setLiquidityAmount(e.target.value)}
+                  placeholder="0.00"
+                  className="w-full bg-neutral-100 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-neutral-900 dark:text-neutral-100 text-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <p className="text-neutral-500 dark:text-neutral-400 text-sm mt-1">
+                  Minimum: 0.1 SOL
+                </p>
+              </div>
+
+              {/* Info */}
+              {liquidityAmount && parseFloat(liquidityAmount) > 0 && (
+                <div
+                  className={`rounded-xl p-4 ${
+                    liquidityAction === "add"
+                      ? "bg-green-100 dark:bg-green-900/30 border border-green-300 dark:border-green-700"
+                      : "bg-orange-100 dark:bg-orange-900/30 border border-orange-300 dark:border-orange-700"
+                  }`}
+                >
+                  <p className="text-sm text-neutral-700 dark:text-neutral-300">
+                    {liquidityAction === "add" ? (
+                      <>
+                        You will {liquidityAction}{" "}
+                        <strong>
+                          {parseFloat(liquidityAmount).toFixed(2)} SOL
+                        </strong>{" "}
+                        to this market. This will enable trading and you may
+                        earn fees from swaps.
+                      </>
+                    ) : (
+                      <>
+                        You will {liquidityAction}{" "}
+                        <strong>
+                          {parseFloat(liquidityAmount).toFixed(2)} SOL
+                        </strong>{" "}
+                        from this market. This may reduce trading availability.
+                      </>
+                    )}
+                  </p>
+                </div>
+              )}
+
+              {/* Transaction Status */}
+              {txSignature && (
+                <div className="bg-green-100 dark:bg-green-900/30 border border-green-300 dark:border-green-700 rounded-lg p-4">
+                  <p className="text-sm text-green-800 dark:text-green-300 mb-2">
+                    Transaction successful!
+                  </p>
+                  <a
+                    href={`https://solscan.io/tx/${txSignature}?cluster=devnet`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-blue-600 dark:text-blue-400 hover:underline break-all"
+                  >
+                    View on Solscan
+                  </a>
+                </div>
+              )}
+
+              {/* Buttons */}
+              <div className="flex gap-3">
+                <button
+                  onClick={() => {
+                    setShowLiquidityModal(false);
+                    setLiquidityAmount("");
+                    setTxSignature(null);
+                  }}
+                  disabled={liquidityLoading}
+                  className="flex-1 bg-neutral-200 dark:bg-neutral-700 hover:bg-neutral-300 dark:hover:bg-neutral-600 text-neutral-900 dark:text-neutral-100 font-bold py-3 px-6 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleLiquidityAction}
+                  disabled={
+                    !wallet.publicKey ||
+                    !liquidityAmount ||
+                    parseFloat(liquidityAmount) < 0.1 ||
+                    liquidityLoading ||
+                    !!txSignature
+                  }
+                  className={`flex-1 font-bold py-3 px-6 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                    liquidityAction === "add"
+                      ? "bg-green-600 hover:bg-green-700 text-white"
+                      : "bg-orange-600 hover:bg-orange-700 text-white"
+                  }`}
+                >
+                  {!wallet.publicKey
+                    ? "Connect Wallet"
+                    : liquidityLoading
+                    ? "Processing..."
+                    : txSignature
+                    ? "Success!"
+                    : liquidityAction === "add"
+                    ? "Add Liquidity"
+                    : "Withdraw Liquidity"}
                 </button>
               </div>
             </div>
