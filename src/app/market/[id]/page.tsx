@@ -122,9 +122,11 @@ export default function MarketDetailPage() {
       try {
         if (useX402 && usdAmount) {
           // Redirect to paywall page with market parameters
-          console.log('💰 Redirecting to X402 payment page');
+          console.log("💰 Redirecting to X402 payment page");
 
-          const paywallUrl = `/paywall?amount=${usdAmount.toFixed(2)}&marketId=${market.id}&outcome=${selectedOutcome}`;
+          const paywallUrl = `/paywall?amount=${usdAmount.toFixed(
+            2
+          )}&marketId=${market.id}&outcome=${selectedOutcome}`;
           window.location.href = paywallUrl;
           return;
         } else {
@@ -153,7 +155,11 @@ export default function MarketDetailPage() {
       } catch (err) {
         console.error("Purchase failed:", err);
         setIsProcessingPayment(false);
-        alert(`Purchase failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+        alert(
+          `Purchase failed: ${
+            err instanceof Error ? err.message : "Unknown error"
+          }`
+        );
       }
     }
   };
@@ -351,7 +357,7 @@ export default function MarketDetailPage() {
         )}
 
         {/* Market Creator Controls - Not Implemented Warning */}
-        {isMarketCreator && (
+        {/* {isMarketCreator && (
           <div className="mb-6 bg-red-50 dark:bg-red-900/20 border-2 border-red-400 dark:border-red-700 rounded-lg p-4">
             <div className="flex items-start gap-3">
               <div className="text-2xl">⚠️</div>
@@ -405,7 +411,7 @@ export default function MarketDetailPage() {
               </div>
             </div>
           </div>
-        )}
+        )} */}
 
         {/* Liquidity Info */}
         {market.liquidity === 0 && !isMarketCreator && (
@@ -417,9 +423,9 @@ export default function MarketDetailPage() {
                   No Liquidity - Using X402 for Payments
                 </h3>
                 <p className="text-sm text-blue-800 dark:text-blue-300">
-                  This market has no liquidity (0 SOL in reserves). You can still
-                  purchase tokens by depositing USDC via X402. Direct contract swaps
-                  won&apos;t work until liquidity is added.
+                  This market has no liquidity (0 SOL in reserves). You can
+                  still purchase tokens by depositing USDC via X402. Direct
+                  contract swaps won&apos;t work until liquidity is added.
                 </p>
               </div>
             </div>
@@ -629,7 +635,8 @@ export default function MarketDetailPage() {
                     </span>
                   </div>
                   <p className="text-xs text-blue-800 dark:text-blue-300">
-                    You&apos;ll be redirected to complete payment using USDC via X402.
+                    You&apos;ll be redirected to complete payment using USDC via
+                    X402.
                   </p>
                 </div>
               )}
@@ -687,7 +694,9 @@ export default function MarketDetailPage() {
                 <div className="text-center py-4">
                   <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
                   <p className="text-sm text-neutral-600 dark:text-neutral-400 mt-2">
-                    {useX402 ? 'Processing X402 payment...' : 'Processing transaction...'}
+                    {useX402
+                      ? "Processing X402 payment..."
+                      : "Processing transaction..."}
                   </p>
                 </div>
               )}
@@ -695,7 +704,9 @@ export default function MarketDetailPage() {
               {txSignature && (
                 <div className="bg-green-100 dark:bg-green-900/30 border border-green-300 dark:border-green-700 rounded-lg p-4">
                   <p className="text-green-700 dark:text-green-400 font-semibold mb-2">
-                    {useX402 ? 'Payment successful!' : 'Transaction successful!'}
+                    {useX402
+                      ? "Payment successful!"
+                      : "Transaction successful!"}
                   </p>
                   <a
                     href={`https://explorer.solana.com/tx/${txSignature}?cluster=devnet`}
@@ -753,7 +764,9 @@ export default function MarketDetailPage() {
                     : txSignature
                     ? "Success!"
                     : useX402
-                    ? `Continue to Payment ($${usdAmount?.toFixed(2) || '0.00'})`
+                    ? `Continue to Payment ($${
+                        usdAmount?.toFixed(2) || "0.00"
+                      })`
                     : "Buy Tokens"}
                 </button>
               </div>
